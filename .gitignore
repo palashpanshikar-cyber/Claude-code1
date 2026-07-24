@@ -1,4 +1,12 @@
 node_modules/
 dist/
+
+# Local data store, plus the temp file the atomic write in store.js
+# renames from.
 backend/data.json
+backend/data.json.tmp
+
+# Per-device firmware config — holds the WiFi password and that machine's
+# device key. Both sketches, not just the ESP32 one.
 firmware/gym_tracker_esp32/config.h
+firmware/gym_tracker_esp8266_vibration/config.h

@@ -99,6 +99,29 @@ web app updates live over the WebSocket — no refresh needed.
   `device_id`/`device_key` is shown once at creation (or via "regenerate
   key" if lost) and never re-servable afterwards, same as a GitHub token.
 
+## Deploying
+
+The Quick Start above runs two dev servers on one machine, which only
+works while that machine is awake and only for people on the same WiFi.
+To put GymPulse on the internet, see **[DEPLOYMENT.md](DEPLOYMENT.md)** —
+`Dockerfile` and `render.yaml` in this directory are ready to use.
+
+A deployment runs as a **single service**: the backend serves the built
+frontend from the same origin as the API and the WebSocket, so there's no
+API base URL to configure anywhere. To try that mode locally:
+
+```bash
+cd frontend && npm run build     # produces frontend/dist
+cd ../backend && ADMIN_TOKEN=changeme NODE_ENV=production npm start
+# whole app on http://localhost:3001 — no Vite server needed
+```
+
+Two things to know before deploying, both covered in detail in
+DEPLOYMENT.md: data lives in a JSON file that a container filesystem will
+erase on every deploy unless you mount a disk and set `DATA_PATH`; and
+sensors must be repointed at the `https://` URL, which both firmware
+sketches now handle by detecting the scheme.
+
 ## Frontend origin
 
 `frontend/`'s design (GymCard/MachineCard layout, search, zone filters,

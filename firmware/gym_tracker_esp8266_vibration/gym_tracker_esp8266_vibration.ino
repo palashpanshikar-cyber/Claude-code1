@@ -21,6 +21,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include "config.h"
 
@@ -83,7 +84,16 @@ bool everMoved = false; // guards against "now - lastMotionAt" looking recent be
 unsigned long lastReportAt = 0;
 String lastReportedStatus = "";
 
-WiFiClient wifiClient;
+// BACKEND_URL is http:// when the backend runs on the same LAN, but a
+// hosted one is https:// and usually redirects http:// away. A plain
+// WiFiClient cannot speak TLS at all, so the scheme decides which client
+// this sketch hands to HTTPClient.
+WiFiClient plainClient;
+WiFiClientSecure secureClient;
+
+bool backendUsesTls() {
+  return String(BACKEND_URL).startsWith("https://");
+}
 
 // Counts transitions in either direction, not just one polarity — cheap
 // SW-420 clones are inconsistent about whether DO idles high or low, but
@@ -138,7 +148,7 @@ void reportStatus(const char* status) {
 
   HTTPClient http;
   String url = String(BACKEND_URL) + "/api/devices/" + DEVICE_ID + "/status";
-  http.begin(wifiClient, url);
+  http.begin(backendUsesTls() ? (WiFiClient&)secureClient : plainClient, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Key", DEVICE_KEY);
 
@@ -170,6 +180,22 @@ void setup() {
 
   pinMode(VIBRATION_PIN, INPUT);
   attachInterrupt(digitalPinToInterrupt(VIBRATION_PIN), onVibrationEdge, CHANGE);
+
+  if (backendUsesTls()) {
+    // Skip certificate validation. The alternative on an ESP8266 is
+    // pinning a fingerprint or a CA, and hosts renew certificates every
+    // few months — a pinned sensor would go silent on renewal day, in a
+    // gym, with no console to tell you why. What this connection carries
+    // is one machine's busy/open state, and the device key it sends can
+    // only push status for that same machine, so an intercepted or forged
+    // report costs a wrong icon rather than access to anything.
+    secureClient.setInsecure();
+    // TLS buffers are allocated from the same small heap as everything
+    // else on an ESP8266. The defaults ask for 16 KB of receive buffer
+    // and the allocation simply fails; these cover the tiny JSON replies
+    // this sketch actually gets back.
+    secureClient.setBufferSizes(1024, 512);
+  }
 
   connectWiFi();
 }

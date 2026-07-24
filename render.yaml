@@ -1,0 +1,27 @@
+# Render blueprint. Point Render at this repo and it reads this file
+# instead of asking you to fill the settings in by hand.
+#
+# The disk is the part that matters: GymPulse keeps its data in a JSON
+# file, and a container filesystem is wiped on every deploy. Without a
+# mounted disk you lose every gym and machine each time you push. Render
+# only offers disks on paid instance types, so the free tier can host this
+# but cannot keep its data — see DEPLOYMENT.md for that tradeoff.
+
+services:
+  - type: web
+    name: gympulse
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      # Generated once by Render and kept secret. Read it from the
+      # dashboard, then paste it into the app's /admin screen.
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: DATA_PATH
+        value: /data/data.json
+    disk:
+      name: gympulse-data
+      mountPath: /data
+      sizeGB: 1

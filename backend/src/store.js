@@ -17,10 +17,22 @@ function empty() {
   return { gyms: [], machines: [], statusEvents: [], nextGymId: 1, nextMachineId: 1, nextEventId: 1 };
 }
 
+// DATA_PATH usually points at a mounted volume in a deployment, and the
+// directory may exist without the file, or not exist at all on first boot.
+fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
+
 let data = fs.existsSync(DATA_PATH) ? JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')) : empty();
 
 function persist() {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+  // Every device status report rewrites this whole file, so an unattended
+  // deployment does it constantly. Writing in place means a crash, a
+  // redeploy, or a full disk mid-write leaves a truncated file that fails
+  // to parse on next boot — losing every gym. Write to a temp file and
+  // rename instead: rename(2) is atomic within a filesystem, so readers
+  // see either the old file or the new one, never a half-written one.
+  const tmpPath = `${DATA_PATH}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, DATA_PATH);
 }
 
 export function resetAll() {

@@ -12,6 +12,7 @@
 // + device credentials before flashing.
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
@@ -59,6 +60,16 @@ unsigned long lastMotionAt = 0;
 bool everMoved = false; // guards against "now - lastMotionAt" looking recent before any real motion sample
 unsigned long lastReportAt = 0;
 String lastReportedStatus = "";
+
+// BACKEND_URL is http:// when the backend runs on the same LAN, but a
+// hosted one is https:// and usually redirects http:// away. The scheme
+// decides which client this sketch hands to HTTPClient.
+WiFiClient plainClient;
+WiFiClientSecure secureClient;
+
+bool backendUsesTls() {
+  return String(BACKEND_URL).startsWith("https://");
+}
 
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -115,7 +126,15 @@ void reportStatus(const char* status) {
 
   HTTPClient http;
   String url = String(BACKEND_URL) + "/api/devices/" + DEVICE_ID + "/status";
-  http.begin(url);
+  // Pass the client explicitly rather than letting HTTPClient pick one
+  // from the URL: what begin(url) does for https:// varies by ESP32 core
+  // version, and the failure mode is a sensor that silently stops
+  // reporting. See the setInsecure() note in setup() for the tradeoff.
+  if (backendUsesTls()) {
+    http.begin(secureClient, url);
+  } else {
+    http.begin(plainClient, url);
+  }
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Key", DEVICE_KEY);
 
@@ -152,6 +171,16 @@ void setup() {
   }
   mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  if (backendUsesTls()) {
+    // Skip certificate validation. Pinning a CA or fingerprint instead
+    // would mean the sensor goes silent whenever the host renews its
+    // certificate, in a gym, with no console to explain why. This
+    // connection carries one machine's busy/open state, and the device
+    // key it sends can only push status for that same machine, so an
+    // intercepted or forged report costs a wrong icon and nothing more.
+    secureClient.setInsecure();
+  }
 
   connectWiFi();
 }
