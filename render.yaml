@@ -1,27 +1,45 @@
 # Render blueprint. Point Render at this repo and it reads this file
 # instead of asking you to fill the settings in by hand.
 #
-# The disk is the part that matters: GymPulse keeps its data in a JSON
-# file, and a container filesystem is wiped on every deploy. Without a
-# mounted disk you lose every gym and machine each time you push. Render
-# only offers disks on paid instance types, so the free tier can host this
-# but cannot keep its data — see DEPLOYMENT.md for that tradeoff.
+# Configured for the FREE tier, which has a real limitation worth
+# understanding before you rely on it: free instances get no persistent
+# disk and spin down when idle. Every cold start is a fresh container, so
+# anything you created through /admin is gone and the app comes back with
+# the demo gyms (SEED_ON_EMPTY below) instead of your own.
+#
+# That makes this good for showing someone the app from a phone, and
+# unsuitable for real sensors — a sensor's device key stops being
+# recognised as soon as the instance restarts.
+#
+# TO MAKE DATA SURVIVE (needed before you point hardware at it):
+#   1. change `plan: free` to `plan: starter`
+#   2. delete the SEED_ON_EMPTY entry
+#   3. uncomment the DATA_PATH entry and the disk: block at the bottom
+# See DEPLOYMENT.md for the full walkthrough.
 
 services:
   - type: web
     name: gympulse
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
+    plan: free
     healthCheckPath: /api/health
     envVars:
       # Generated once by Render and kept secret. Read it from the
       # dashboard, then paste it into the app's /admin screen.
       - key: ADMIN_TOKEN
         generateValue: true
-      - key: DATA_PATH
-        value: /data/data.json
-    disk:
-      name: gympulse-data
-      mountPath: /data
-      sizeGB: 1
+
+      # Free tier only — see the note at the top. Remove this once you
+      # have a disk, so the app keeps your real gyms instead of
+      # repopulating demo ones.
+      - key: SEED_ON_EMPTY
+        value: "true"
+
+      # - key: DATA_PATH
+      #   value: /data/data.json
+
+    # disk:
+    #   name: gympulse-data
+    #   mountPath: /data
+    #   sizeGB: 1

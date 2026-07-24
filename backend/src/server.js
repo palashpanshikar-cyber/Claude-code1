@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { listAllMachines } from './store.js';
+import { listAllMachines, listGyms } from './store.js';
+import { seedDemoData } from './seedData.js';
 import { gymsRouter } from './routes/gyms.js';
 import { machinesRouter } from './routes/machines.js';
 import { devicesRouter } from './routes/devices.js';
@@ -14,6 +15,21 @@ import { registerClient, broadcast } from './hub.js';
 import { serializeMachine } from './machines.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// A host with no persistent disk rebuilds the container filesystem on
+// every cold start, so the data file is gone each time the app wakes from
+// idle and it comes back as an empty app with no way in but the admin
+// panel. This puts the demo gyms back so a free-tier deployment is still
+// worth opening. Opt-in, and gated on the store actually being empty, so
+// it can never overwrite data someone entered.
+//
+// Not a substitute for a disk: the seed mints new device keys each time,
+// so any sensor flashed with the previous ones goes unrecognised. Mount a
+// volume before pointing real hardware at a deployment.
+if (process.env.SEED_ON_EMPTY === 'true' && listGyms().length === 0) {
+  seedDemoData();
+  console.log('SEED_ON_EMPTY: store was empty — inserted demo gyms');
+}
 
 const app = express();
 

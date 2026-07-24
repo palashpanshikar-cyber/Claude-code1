@@ -87,12 +87,39 @@ rather than making you fill in a form.
 
 ### Free tier, honestly
 
-Render's free instances spin down after inactivity and cold-start on the
-next request, taking tens of seconds. For this app that means a sensor's
-status POST can time out against a sleeping instance, and the first phone
-to open the app in a while waits through the wake-up. Free is fine for
-showing someone the app; it is not fine for sensors you expect to be
-accurate. And free gets you no disk, so see the persistence section again.
+`render.yaml` currently targets the **free** plan, so the walkthrough
+above works without a paid instance. Know what you're getting:
+
+- **Nothing you create survives a restart.** No disk, so every cold start
+  is a fresh container. Gyms you added through `/admin` are gone.
+- **It sleeps.** Free instances spin down after inactivity and take tens
+  of seconds to wake. The first phone to open the app in a while waits
+  through that, and a sensor's status POST can time out against a
+  sleeping instance.
+- **Device keys change on every restart.** Because of `SEED_ON_EMPTY`
+  below, a woken instance mints fresh keys. Anything you flashed with the
+  old ones stops being recognised.
+
+So: fine for showing someone the app from a phone. Not fine for real
+sensors. Mount a disk before you point hardware at it.
+
+`SEED_ON_EMPTY=true` exists for exactly this tier. Without it a woken
+free instance serves an empty app with no way in but the admin panel;
+with it, the demo gyms come back so the page is worth opening. It only
+ever fires when the store is genuinely empty, so it cannot overwrite
+anything you entered — but it is a cosmetic patch over a missing disk,
+not a substitute for one.
+
+### Upgrading to persistent data
+
+When you're ready for hardware, edit `render.yaml`:
+
+1. `plan: free` → `plan: starter`
+2. delete the `SEED_ON_EMPTY` entry
+3. uncomment the `DATA_PATH` entry and the `disk:` block
+
+Commit, push, and Render redeploys with a real disk. Then recreate your
+gyms through `/admin` and take fresh device keys from there.
 
 ### Other platforms
 
@@ -113,6 +140,7 @@ set `DATA_PATH` into it, set `ADMIN_TOKEN`, keep it to one instance.
 | `NODE_ENV` | recommended | *(unset)* | `production` closes CORS to cross-origin browsers. Set by the `Dockerfile`. |
 | `CORS_ORIGIN` | no | *(unset)* | Comma-separated origins to allow. Only needed if you host the frontend somewhere other than the backend. Doesn't affect sensors — they don't send `Origin`. |
 | `CLIENT_DIR` | no | `../frontend/dist` | Where to find the built frontend. The default is already correct in the image. |
+| `SEED_ON_EMPTY` | no | *(unset)* | Set to `true` to insert the demo gyms at boot **when the store is empty**. For disk-less free tiers, where a cold start would otherwise serve a blank app. Never overwrites existing data, but mints new device keys each time it fires — leave it unset once you have a disk. |
 
 ---
 
