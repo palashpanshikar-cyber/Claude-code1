@@ -1,0 +1,4 @@
+node_modules/
+dist/
+backend/data.json
+firmware/gym_tracker_esp32/config.h
