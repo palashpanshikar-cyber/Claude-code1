@@ -3,7 +3,9 @@ import { useParams, Link } from "react-router-dom";
 import { ArrowLeft, MapPin, Star } from "lucide-react";
 import MachineCard from "@/components/MachineCard";
 import PullToRefresh from "@/components/PullToRefresh";
+import { EmptyState, ErrorState, StaleBanner, WakingNotice } from "@/components/LoadState";
 import { cn } from "@/lib/utils";
+import { useCachedResource } from "@/lib/useCachedResource";
 import { fetchGym, fetchMachines, subscribeToUpdates } from "@/lib/api";
 import { getFavoriteGymId, toggleFavoriteGym } from "@/lib/favorites";
 import { ensureNotificationPermission, notify } from "@/lib/notifications";
@@ -18,9 +20,6 @@ const FILTERS = [
 export default function GymDetail() {
   const { id } = useParams();
   const gymId = Number(id);
-  const [gym, setGym] = useState(null);
-  const [machines, setMachines] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [zone, setZone] = useState("all");
   const [favoriteId, setFavoriteId] = useState(getFavoriteGymId());
@@ -34,15 +33,26 @@ export default function GymDetail() {
   const watchedIdsRef = useRef(new Set());
   const [watchedIds, setWatchedIds] = useState(() => new Set());
 
+  // Both halves of the page in one cache entry, so a cold start restores
+  // the header and the machine list together rather than showing one
+  // without the other.
   const loadData = useCallback(async () => {
-    const [g, m] = await Promise.all([fetchGym(gymId), fetchMachines(gymId)]);
-    setGym(g);
-    setMachines(m);
+    const [gym, machines] = await Promise.all([fetchGym(gymId), fetchMachines(gymId)]);
+    return { gym, machines };
   }, [gymId]);
 
-  useEffect(() => {
-    loadData().finally(() => setLoading(false));
-  }, [loadData]);
+  const {
+    data,
+    savedAt,
+    isStale,
+    phase,
+    error,
+    reload,
+    setData,
+  } = useCachedResource(`gym:${gymId}`, loadData);
+
+  const gym = data?.gym ?? null;
+  const machines = data?.machines ?? [];
 
   // Live updates over WebSocket, filtered to this gym. Also the trigger
   // point for "notify me when open": fires only while this page is mounted
@@ -51,7 +61,13 @@ export default function GymDetail() {
   useEffect(() => {
     const unsubscribe = subscribeToUpdates((updated) => {
       if (updated.gym_id !== gymId) return;
-      setMachines((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      // Pure updater — the notification side effect below stays outside
+      // it deliberately; see the watchedIdsRef comment above.
+      setData((prev) =>
+        prev
+          ? { ...prev, machines: prev.machines.map((m) => (m.id === updated.id ? updated : m)) }
+          : prev
+      );
 
       if (watchedIdsRef.current.has(updated.id) && updated.status === "open") {
         watchedIdsRef.current.delete(updated.id);
@@ -60,7 +76,7 @@ export default function GymDetail() {
       }
     });
     return unsubscribe;
-  }, [gymId]);
+  }, [gymId, setData]);
 
   const toggleWatch = useCallback(async (machineId) => {
     if (watchedIdsRef.current.has(machineId)) {
@@ -81,28 +97,50 @@ export default function GymDetail() {
   );
   const openCount = machines.filter((m) => m.status === "open").length;
 
-  if (loading) {
+  // A missing gym is permanent and a failed request isn't, so they get
+  // different screens — retrying a 404 would only ever fail again. This
+  // comes up in practice on a host without a persistent disk, where a
+  // saved link outlives the gym it pointed at.
+  if (!gym && error?.code === "NOT_FOUND") {
     return (
-      <div className="min-h-screen bg-background">
-        <div className="mx-auto max-w-3xl px-5 py-6">
-          <div className="mb-4 h-8 w-40 animate-pulse rounded-lg bg-muted" />
-          <div className="grid gap-3">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-[72px] animate-pulse rounded-xl bg-muted" />
-            ))}
-          </div>
-        </div>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-5 text-center">
+        <p className="text-sm font-medium">Gym not found.</p>
+        <p className="max-w-sm text-xs text-muted-foreground">
+          It may have been removed, or the server restarted and lost it.
+        </p>
+        <Link to="/" className="text-sm font-medium underline">
+          Back to gyms
+        </Link>
       </div>
     );
   }
 
   if (!gym) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
-        <p className="text-sm text-muted-foreground">Gym not found.</p>
-        <Link to="/" className="text-sm font-medium underline">
-          Back to gyms
-        </Link>
+      <div className="min-h-screen bg-background">
+        <div className="mx-auto max-w-3xl px-5 py-6">
+          <Link
+            to="/"
+            className="mb-4 inline-flex min-h-[44px] select-none items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            All gyms
+          </Link>
+          {phase === "waking" ? (
+            <WakingNotice />
+          ) : phase === "error" ? (
+            <ErrorState onRetry={reload} />
+          ) : (
+            <>
+              <div className="mb-4 h-8 w-40 animate-pulse rounded-lg bg-muted" />
+              <div className="grid gap-3">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="h-[72px] animate-pulse rounded-xl bg-muted" />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -155,7 +193,14 @@ export default function GymDetail() {
       </header>
 
       <main className="mx-auto max-w-3xl px-5 py-6 pb-[env(safe-area-inset-bottom)]">
-        <PullToRefresh onRefresh={loadData}>
+        <PullToRefresh onRefresh={reload}>
+          {isStale && (phase === "error" || phase === "waking") ? (
+            <StaleBanner
+              savedAt={savedAt}
+              mode={phase === "error" ? "failed" : "refreshing"}
+              onRetry={reload}
+            />
+          ) : null}
           <div className="mb-4 flex flex-wrap items-center gap-2">
             {FILTERS.map((f) => (
               <button
@@ -193,9 +238,14 @@ export default function GymDetail() {
           )}
 
           {filtered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border py-16 text-center">
-              <p className="text-sm text-muted-foreground">No machines match this filter.</p>
-            </div>
+            machines.length === 0 ? (
+              <EmptyState
+                title="No machines in this gym yet."
+                hint="Add them from the admin panel."
+              />
+            ) : (
+              <EmptyState title="No machines match this filter." />
+            )
           ) : (
             <div className="grid gap-3">
               {filtered.map((m) => (

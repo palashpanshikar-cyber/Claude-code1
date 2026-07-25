@@ -1,27 +1,26 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { Search, Settings } from "lucide-react";
 import GymCard from "@/components/GymCard";
 import PullToRefresh from "@/components/PullToRefresh";
+import { ErrorState, EmptyState, StaleBanner, WakingNotice } from "@/components/LoadState";
 import { fetchGyms } from "@/lib/api";
+import { useCachedResource } from "@/lib/useCachedResource";
 import { getFavoriteGymId, toggleFavoriteGym } from "@/lib/favorites";
 
 export default function Home() {
-  const [gyms, setGyms] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [favoriteId, setFavoriteId] = useState(getFavoriteGymId());
 
-  const loadGyms = useCallback(async () => {
-    const data = await fetchGyms();
-    setGyms(data);
-  }, []);
+  const {
+    data: gyms,
+    savedAt,
+    isStale,
+    phase,
+    reload,
+  } = useCachedResource("gyms", fetchGyms);
 
-  useEffect(() => {
-    loadGyms().finally(() => setLoading(false));
-  }, [loadGyms]);
-
-  const filtered = gyms
+  const filtered = (gyms ?? [])
     .filter((g) =>
       [g.name, g.city, g.address]
         .filter(Boolean)
@@ -62,7 +61,7 @@ export default function Home() {
       </header>
 
       <main className="mx-auto max-w-5xl px-5 py-6 pb-[env(safe-area-inset-bottom)]">
-        <PullToRefresh onRefresh={loadGyms}>
+        <PullToRefresh onRefresh={reload}>
           <div className="relative mb-6">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -73,27 +72,55 @@ export default function Home() {
             />
           </div>
 
-          {loading ? (
+          {/* Nothing cached to fall back on, so the wait itself is what
+              there is to report. Order matters: a cold host is the common
+              case on free hosting and shouldn't be called an error. */}
+          {gyms === null && phase === "waking" ? (
+            <WakingNotice />
+          ) : gyms === null && phase === "error" ? (
+            <ErrorState onRetry={reload} />
+          ) : gyms === null ? (
             <div className="grid gap-5 sm:grid-cols-2">
               {[0, 1, 2, 3].map((i) => (
                 <div key={i} className="h-60 animate-pulse rounded-2xl bg-muted" />
               ))}
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border py-16 text-center">
-              <p className="text-sm text-muted-foreground">No gyms found.</p>
-            </div>
           ) : (
-            <div className="grid gap-5 sm:grid-cols-2">
-              {filtered.map((gym) => (
-                <GymCard
-                  key={gym.id}
-                  gym={gym}
-                  isFavorite={gym.id === favoriteId}
-                  onToggleFavorite={(id) => setFavoriteId(toggleFavoriteGym(id))}
+            <>
+              {/* Only once a request has actually failed, or is slow
+                  enough that the data on screen is visibly old — not for
+                  the brief moment every normal load spends fetching. */}
+              {isStale && (phase === "error" || phase === "waking") ? (
+                <StaleBanner
+                  savedAt={savedAt}
+                  mode={phase === "error" ? "failed" : "refreshing"}
+                  onRetry={reload}
                 />
-              ))}
-            </div>
+              ) : null}
+              {filtered.length === 0 ? (
+                // An empty list means two different things, and which one
+                // decides what the reader should do next.
+                gyms.length === 0 ? (
+                  <EmptyState
+                    title="No gyms yet."
+                    hint="Add one from the admin panel using the gear icon above."
+                  />
+                ) : (
+                  <EmptyState title={`No gyms match "${query}".`} />
+                )
+              ) : (
+                <div className="grid gap-5 sm:grid-cols-2">
+                  {filtered.map((gym) => (
+                    <GymCard
+                      key={gym.id}
+                      gym={gym}
+                      isFavorite={gym.id === favoriteId}
+                      onToggleFavorite={(id) => setFavoriteId(toggleFavoriteGym(id))}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </PullToRefresh>
       </main>

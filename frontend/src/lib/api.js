@@ -38,6 +38,16 @@ export async function fetchGyms() {
 
 export async function fetchGym(gymId) {
   const res = await fetch(`/api/gyms/${gymId}`);
+  if (res.status === 404) {
+    // Distinguished from a transport failure because the two need
+    // opposite responses from the reader: retrying a 404 will never help,
+    // and it's a case that comes up for real — a bookmarked or shared gym
+    // link outlives the gym it points at, and on a host with no
+    // persistent disk that happens every time the instance restarts.
+    const err = new Error('gym not found');
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
   if (!res.ok) throw new Error('failed to load gym');
   return mapGym(await res.json());
 }
