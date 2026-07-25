@@ -159,7 +159,15 @@ export default function GymDetail() {
     }
 
     const granted = await ensureNotificationPermission();
-    if (!granted) return;
+    if (!granted) {
+      // Previously returned silently, so a blocked permission made the bell
+      // do nothing at all: no state change, no message, nothing to act on.
+      // Chrome returns 'denied' immediately without prompting when
+      // notifications are blocked for the site or browser-wide, so the tap
+      // looked broken rather than refused.
+      setWatchModes((prev) => ({ ...prev, [machineId]: "blocked" }));
+      return;
+    }
 
     // Try real push first, so the alert survives closing the browser. If
     // the server has no VAPID keys, or this browser won't subscribe, fall

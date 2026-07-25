@@ -166,6 +166,15 @@ export default function MachineCard({ machine, isWatched, watchMode, onToggleWat
           aren't available on this browser.
         </p>
       )}
+      {/* Not watched, because permission was refused. Says so, and where to
+          change it — the browser gives no prompt to retry once blocked. */}
+      {!isWatched && watchMode === "blocked" && (
+        <p className="mt-2 text-[11px] text-red-600">
+          Notifications are blocked for this site. Enable them in your browser
+          settings (tap the icon left of the address bar → Permissions →
+          Notifications), then tap the bell again.
+        </p>
+      )}
     </div>
   );
 }
