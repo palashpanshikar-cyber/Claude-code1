@@ -31,33 +31,60 @@ sensors ──┘         (one host)                        ├──> /ws     W
 
 ## The one thing that will bite you: persistence
 
-GymPulse stores everything in a single JSON file. Hosting platforms run
-your app in a **container with an ephemeral filesystem** — it is rebuilt
-from the image on every deploy, restart, and crash. Anything written at
-runtime is gone.
+By default GymPulse stores everything in a single JSON file. Hosting
+platforms run your app in a **container with an ephemeral filesystem** —
+rebuilt from the image on every deploy, restart, and crash. Anything
+written at runtime is gone.
 
-Without a persistent disk, **every gym and machine you create disappears
-the next time you deploy**, along with every device key you handed to a
-sensor. The sensors keep POSTing keys the server no longer recognises and
-get 404s forever.
+So by default, **every gym and machine you create disappears the next time
+the app restarts**, along with every device key you handed to a sensor.
+The sensors keep POSTing keys the server no longer recognises and get 404s
+forever.
 
-The fix is to mount a persistent volume and point `DATA_PATH` inside it:
+There are two ways to fix it, and on a free tier only one of them works.
+
+### Recommended: a free managed Postgres
+
+Set `DATABASE_URL` and the app stores everything in Postgres instead of a
+file. It picks the backend at startup, creates its own tables, and needs
+no other configuration.
+
+1. Create a free database at [neon.tech](https://neon.tech) or
+   [supabase.com](https://supabase.com).
+2. Copy its connection string — `postgresql://user:pass@host/dbname`.
+3. Set it as `DATABASE_URL` in your host's environment settings. Set it
+   **there, not in `render.yaml`** — it contains a password.
+4. Redeploy. The log line `store: postgres` confirms it took.
+5. Remove `SEED_ON_EMPTY`; there is nothing left to repopulate.
+
+This is the only way to keep data on a free plan, and it's what makes
+running real sensors viable without paying for hosting.
+
+Two knobs you probably won't need: `DATABASE_SSL_NO_VERIFY=true` if your
+provider presents a private CA (leaves the connection encrypted but
+unauthenticated — set it only if required), and `DATABASE_POOL_MAX`
+(default 5, sized for free tiers' low connection caps).
+
+### Alternative: a persistent disk
+
+Keeps the JSON store but puts the file on a volume that survives:
 
 ```
 DATA_PATH=/data/data.json    # with a disk mounted at /data
 ```
 
-`Dockerfile` and `render.yaml` both already do this. Just don't remove it,
-and don't deploy to a plan that has no disk while expecting data to
-survive. On most platforms persistent disks require a paid instance —
-that's the real cost of "works when my PC is off."
+The `Dockerfile` already defaults `DATA_PATH` to `/data/data.json` and
+declares the volume. On most platforms, including Render, disks require a
+**paid** instance — which is why Postgres is the recommendation above.
 
-**Related constraint:** the JSON store assumes a single writer. Run
-**one instance only**. Two instances would each hold their own copy of the
-data in memory and overwrite each other's file — do not enable autoscaling
-or set a replica count above 1. If you outgrow that, the comment at the
-top of `backend/src/store.js` is the place to start swapping in a real
-database.
+### Either way: one instance only
+
+The JSON store assumes a single writer; two instances would each hold
+their own copy in memory and overwrite each other's file. Postgres removes
+that constraint at the storage layer, but the in-memory `lastBroadcastStatus`
+map in `server.js` and the WebSocket fan-out are still per-process, so a
+second instance would broadcast to only its own clients. Don't enable
+autoscaling.
 
 ---
 
@@ -87,39 +114,32 @@ rather than making you fill in a form.
 
 ### Free tier, honestly
 
-`render.yaml` currently targets the **free** plan, so the walkthrough
-above works without a paid instance. Know what you're getting:
+`render.yaml` targets the **free** plan, so the walkthrough above needs no
+paid instance. What you get depends on whether you set `DATABASE_URL`.
 
-- **Nothing you create survives a restart.** No disk, so every cold start
-  is a fresh container. Gyms you added through `/admin` are gone.
-- **It sleeps.** Free instances spin down after inactivity and take tens
-  of seconds to wake. The first phone to open the app in a while waits
-  through that, and a sensor's status POST can time out against a
-  sleeping instance.
-- **Device keys change on every restart.** Because of `SEED_ON_EMPTY`
-  below, a woken instance mints fresh keys. Anything you flashed with the
-  old ones stops being recognised.
+**With `DATABASE_URL`** (recommended — see the persistence section):
 
-So: fine for showing someone the app from a phone. Not fine for real
-sensors. Mount a disk before you point hardware at it.
+- Your gyms, machines and device keys survive restarts.
+- Still sleeps when idle: the first request after a quiet spell takes tens
+  of seconds while the container boots. A sensor's status POST can time
+  out against a sleeping instance, so expect occasional gaps in readings.
+- Good enough for real sensors, with that caveat. `plan: starter` removes
+  the sleeping.
 
-`SEED_ON_EMPTY=true` exists for exactly this tier. Without it a woken
-free instance serves an empty app with no way in but the admin panel;
-with it, the demo gyms come back so the page is worth opening. It only
-ever fires when the store is genuinely empty, so it cannot overwrite
-anything you entered — but it is a cosmetic patch over a missing disk,
-not a substitute for one.
+**Without `DATABASE_URL`** (JSON file on an ephemeral filesystem):
 
-### Upgrading to persistent data
+- **Nothing you create survives a restart.** Gyms added through `/admin`
+  are gone on the next wake.
+- **Device keys are reissued on every restart**, so anything you flashed
+  stops being recognised. Don't run sensors against this.
+- Fine for showing someone the app from a phone; that's about it.
 
-When you're ready for hardware, edit `render.yaml`:
-
-1. `plan: free` → `plan: starter`
-2. delete the `SEED_ON_EMPTY` entry
-3. uncomment the `DATA_PATH` entry and the `disk:` block
-
-Commit, push, and Render redeploys with a real disk. Then recreate your
-gyms through `/admin` and take fresh device keys from there.
+`SEED_ON_EMPTY=true` exists only for that second case. Without it a woken
+instance serves an empty app whose only entry point is the admin panel;
+with it, the demo gyms come back so the page is worth opening. It fires
+only when the store is genuinely empty, so it cannot overwrite anything
+you entered — but it papers over missing persistence rather than providing
+it. Set `DATABASE_URL` and remove it.
 
 ### Other platforms
 
@@ -135,7 +155,10 @@ set `DATA_PATH` into it, set `ADMIN_TOKEN`, keep it to one instance.
 | Variable | Required | Default | What it does |
 |---|---|---|---|
 | `ADMIN_TOKEN` | for `/admin` | *(unset)* | Shared password for the admin CRUD routes. **No default by design** — while unset, every admin route answers `503`, so the panel can never run open by accident. Use a long random string. |
-| `DATA_PATH` | in production | `backend/data.json` | Where the JSON store lives. Point this at a mounted disk or lose your data on redeploy. |
+| `DATABASE_URL` | recommended | *(unset)* | Postgres connection string. Set it and the app stores data in Postgres, creating its tables on boot; leave it unset and data goes to a JSON file. The only way to keep data on a free plan. Contains a password — set it in your host's dashboard, never in `render.yaml`. |
+| `DATA_PATH` | if using the JSON store | `backend/data.json` | Where the JSON file lives. Ignored when `DATABASE_URL` is set. Point it at a mounted disk or lose your data on redeploy. |
+| `DATABASE_SSL_NO_VERIFY` | no | *(unset)* | `true` skips TLS certificate verification for the database. Needed only by providers using a private CA; leaves the connection encrypted but unauthenticated. |
+| `DATABASE_POOL_MAX` | no | `5` | Max Postgres connections. Kept low because free tiers cap them. |
 | `PORT` | no | `3001` | Most platforms set this for you. |
 | `NODE_ENV` | recommended | *(unset)* | `production` closes CORS to cross-origin browsers. Set by the `Dockerfile`. |
 | `CORS_ORIGIN` | no | *(unset)* | Comma-separated origins to allow. Only needed if you host the frontend somewhere other than the backend. Doesn't affect sensors — they don't send `Origin`. |

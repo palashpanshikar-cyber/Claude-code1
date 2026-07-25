@@ -34,13 +34,13 @@ const DEMO_GYMS = [
 // Device keys are freshly generated on every call, so a machine seeded
 // twice is not the same machine twice: anything already flashed with the
 // previous key stops being recognised.
-export function seedDemoData({ onMachine } = {}) {
+export async function seedDemoData({ onMachine } = {}) {
   for (const gym of DEMO_GYMS) {
-    const gymRow = insertGym(gym.name, gym.address, gym.city);
+    const gymRow = await insertGym(gym.name, gym.address, gym.city);
     for (const [name, machineType] of gym.machines) {
       const deviceId = `dev_${crypto.randomBytes(4).toString('hex')}`;
       const deviceKey = crypto.randomBytes(16).toString('hex');
-      insertMachine({
+      await insertMachine({
         gymId: gymRow.id,
         name,
         machineType,

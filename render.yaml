@@ -1,21 +1,23 @@
 # Render blueprint. Point Render at this repo and it reads this file
 # instead of asking you to fill the settings in by hand.
 #
-# Configured for the FREE tier, which has a real limitation worth
-# understanding before you rely on it: free instances get no persistent
-# disk and spin down when idle. Every cold start is a fresh container, so
-# anything you created through /admin is gone and the app comes back with
-# the demo gyms (SEED_ON_EMPTY below) instead of your own.
+# Configured for the FREE tier. Free instances get no persistent disk, so
+# the container filesystem — and the JSON data file in it — is rebuilt on
+# every deploy and every wake from idle.
 #
-# That makes this good for showing someone the app from a phone, and
-# unsuitable for real sensors — a sensor's device key stops being
-# recognised as soon as the instance restarts.
+# RECOMMENDED: add a free managed Postgres and your data survives anyway.
+# Create a database at neon.tech or supabase.com, then set DATABASE_URL in
+# Render's dashboard (Environment tab) to its connection string. The app
+# switches stores on its own, creates its tables on boot, and keeps your
+# gyms across restarts — no paid instance needed. Then delete the
+# SEED_ON_EMPTY entry below, since there is no longer anything to repopulate.
 #
-# TO MAKE DATA SURVIVE (needed before you point hardware at it):
-#   1. change `plan: free` to `plan: starter`
-#   2. delete the SEED_ON_EMPTY entry
-#   3. uncomment the DATA_PATH entry and the disk: block at the bottom
-# See DEPLOYMENT.md for the full walkthrough.
+# Without DATABASE_URL, SEED_ON_EMPTY keeps a woken instance from serving a
+# blank app, but anything you added through /admin is gone and device keys
+# are reissued. See DEPLOYMENT.md.
+#
+# Free instances also spin down when idle and take tens of seconds to wake.
+# That is independent of where the data lives; `plan: starter` removes it.
 
 services:
   - type: web
@@ -30,16 +32,14 @@ services:
       - key: ADMIN_TOKEN
         generateValue: true
 
-      # Free tier only — see the note at the top. Remove this once you
-      # have a disk, so the app keeps your real gyms instead of
-      # repopulating demo ones.
+      # Set this in the dashboard rather than here — a connection string
+      # contains a password and does not belong in git. Declared with
+      # sync: false so Render prompts for it instead of storing a value.
+      - key: DATABASE_URL
+        sync: false
+
+      # Only useful while DATABASE_URL is unset. Remove it once you have a
+      # database, so the app keeps your real gyms instead of repopulating
+      # demo ones.
       - key: SEED_ON_EMPTY
         value: "true"
-
-      # - key: DATA_PATH
-      #   value: /data/data.json
-
-    # disk:
-    #   name: gympulse-data
-    #   mountPath: /data
-    #   sizeGB: 1

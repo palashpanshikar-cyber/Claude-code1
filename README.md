@@ -117,10 +117,13 @@ cd ../backend && ADMIN_TOKEN=changeme NODE_ENV=production npm start
 ```
 
 Two things to know before deploying, both covered in detail in
-DEPLOYMENT.md: data lives in a JSON file that a container filesystem will
-erase on every deploy unless you mount a disk and set `DATA_PATH`; and
-sensors must be repointed at the `https://` URL, which both firmware
-sketches now handle by detecting the scheme.
+DEPLOYMENT.md. First, storage: by default data lives in a JSON file that a
+container filesystem erases on every deploy, so set `DATABASE_URL` to a
+free managed Postgres (neon.tech, supabase.com) and the app switches
+backends on its own and creates its tables on boot — that's the only way
+to keep data on a free plan. Second, sensors must be repointed at the
+`https://` URL, which both firmware sketches handle by detecting the
+scheme.
 
 ## Frontend origin
 

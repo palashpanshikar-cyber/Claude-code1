@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { listAllMachines, listGyms } from './store.js';
+import { listAllMachines, listGyms, initStore, closeStore, storeName } from './store.js';
 import { seedDemoData } from './seedData.js';
 import { gymsRouter } from './routes/gyms.js';
 import { machinesRouter } from './routes/machines.js';
@@ -15,21 +15,6 @@ import { registerClient, broadcast } from './hub.js';
 import { serializeMachine } from './machines.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// A host with no persistent disk rebuilds the container filesystem on
-// every cold start, so the data file is gone each time the app wakes from
-// idle and it comes back as an empty app with no way in but the admin
-// panel. This puts the demo gyms back so a free-tier deployment is still
-// worth opening. Opt-in, and gated on the store actually being empty, so
-// it can never overwrite data someone entered.
-//
-// Not a substitute for a disk: the seed mints new device keys each time,
-// so any sensor flashed with the previous ones goes unrecognised. Mount a
-// volume before pointing real hardware at a deployment.
-if (process.env.SEED_ON_EMPTY === 'true' && listGyms().length === 0) {
-  seedDemoData();
-  console.log('SEED_ON_EMPTY: store was empty — inserted demo gyms');
-}
 
 const app = express();
 
@@ -106,6 +91,15 @@ if (hasClientBuild) {
   });
 }
 
+// Last middleware, so it catches what the async route wrapper forwards.
+// Without it Express would answer a failed store call with its default
+// HTML error page, which a fetch() caller can't parse.
+app.use((err, req, res, next) => {
+  console.error('request failed:', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'internal_error' });
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => registerClient(ws));
@@ -115,26 +109,64 @@ wss.on('connection', (ws) => registerClient(ws));
 // This sweep re-evaluates staleness on a timer and broadcasts the flip so
 // connected clients don't have to poll just to catch that case.
 const lastBroadcastStatus = new Map();
-const offlineSweep = setInterval(() => {
-  for (const machine of listAllMachines()) {
-    const serialized = serializeMachine(machine);
-    if (lastBroadcastStatus.get(machine.id) !== serialized.status) {
-      lastBroadcastStatus.set(machine.id, serialized.status);
-      broadcast({ type: 'machine_update', machine: serialized });
+const offlineSweep = setInterval(async () => {
+  try {
+    for (const machine of await listAllMachines()) {
+      const serialized = serializeMachine(machine);
+      if (lastBroadcastStatus.get(machine.id) !== serialized.status) {
+        lastBroadcastStatus.set(machine.id, serialized.status);
+        broadcast({ type: 'machine_update', machine: serialized });
+      }
     }
+  } catch (err) {
+    // A timer callback that throws takes the process down, and a database
+    // blip is not worth restarting the server over — the next tick retries.
+    console.error('offline sweep failed (will retry):', err.message);
   }
 }, 15_000);
 
 const PORT = process.env.PORT || 3001;
 
-// Bind on all interfaces: containers route traffic in from outside the
-// loopback address, so a localhost-only bind is unreachable in a deploy.
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`gym-tracker backend listening on :${PORT} (HTTP + WS at /ws)`);
-  console.log(hasClientBuild ? `serving frontend from ${clientDir}` : 'no frontend build found — API only');
-  if (!process.env.ADMIN_TOKEN) {
-    console.warn('ADMIN_TOKEN not set — admin routes will respond 503 until it is');
+async function start() {
+  // Connect and create tables before accepting traffic, so the first
+  // request can't land on an unmigrated database.
+  await initStore();
+  console.log(`store: ${storeName}`);
+
+  // A host with no persistent disk rebuilds the container filesystem on
+  // every cold start, so the data file is gone each time the app wakes
+  // from idle and it comes back empty with no way in but the admin panel.
+  // This puts the demo gyms back so a free-tier deployment is still worth
+  // opening. Opt-in, and gated on the store actually being empty, so it
+  // can never overwrite data someone entered.
+  //
+  // Not a substitute for real persistence: the seed mints new device keys
+  // each time, so any sensor flashed with the previous ones goes
+  // unrecognised. Use DATABASE_URL or a mounted disk before pointing real
+  // hardware at a deployment.
+  if (process.env.SEED_ON_EMPTY === 'true' && (await listGyms()).length === 0) {
+    await seedDemoData();
+    console.log('SEED_ON_EMPTY: store was empty — inserted demo gyms');
   }
+
+  // Bind on all interfaces: containers route traffic in from outside the
+  // loopback address, so a localhost-only bind is unreachable in a deploy.
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`gym-tracker backend listening on :${PORT} (HTTP + WS at /ws)`);
+    console.log(hasClientBuild ? `serving frontend from ${clientDir}` : 'no frontend build found — API only');
+    if (!process.env.ADMIN_TOKEN) {
+      console.warn('ADMIN_TOKEN not set — admin routes will respond 503 until it is');
+    }
+  });
+}
+
+start().catch((err) => {
+  // An unreachable database or a failed migration means the app cannot
+  // serve anything meaningful. Exit loudly so the platform reports a
+  // failed deploy, rather than staying up and answering every request
+  // with a 500.
+  console.error('failed to start:', err);
+  process.exit(1);
 });
 
 // Platforms stop a container by sending SIGTERM and SIGKILLing whatever
@@ -148,7 +180,12 @@ function shutdown(signal) {
   console.log(`${signal} received — shutting down`);
   clearInterval(offlineSweep);
   for (const client of wss.clients) client.close(1001, 'server shutting down');
-  server.close(() => process.exit(0));
+  server.close(async () => {
+    // Release database connections rather than leaving the provider to
+    // time them out — free tiers cap how many you may hold.
+    await closeStore().catch(() => {});
+    process.exit(0);
+  });
   // Don't hang forever on a connection that refuses to drain. unref() so
   // this timer alone can't be what keeps the process alive.
   setTimeout(() => process.exit(1), 10_000).unref();
