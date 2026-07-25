@@ -87,12 +87,22 @@ web app updates live over the WebSocket — no refresh needed.
 - **Favorites**: tap the star on any gym card (or in a gym's detail header)
   to pin it as your "home gym" — it sorts first on the home screen. Stored
   in the browser's localStorage, no account needed.
-- **Notify me when open**: on a busy machine, tap the bell icon to get a
-  browser notification the moment it flips to open. This rides the same
-  WebSocket connection the app already uses for live updates — it only
-  fires while the app/tab is open (foreground or backgrounded), not if
-  you've fully closed the browser. True closed-app push would need real
-  Web Push (VAPID keys + a subscription store), which isn't implemented.
+- **Notify me when open**: on a busy machine, tap the bell to be told the
+  moment it frees up. Where the server has VAPID keys configured this uses
+  real Web Push, handled by the service worker, so it fires even with the
+  browser fully closed — see DEPLOYMENT.md to set that up. Without those
+  keys it falls back to the original WebSocket-based notification, which
+  only fires while a tab is running. The server decides which is in play
+  and the app adapts, so a deployment without push keys still works.
+- **Report a machine's status**: anyone can tap "In use" or "It's free" on
+  a machine, which is what gives the app real data before any sensor
+  hardware exists. A live sensor always overrides a person's report, and
+  reports expire after 20 minutes; crowd-sourced readings are labelled as
+  such so they're never mistaken for a live measurement.
+- **Honest loading states**: the app distinguishes a server still waking
+  up from a request that failed from a genuinely empty list, and shows
+  last-known data (labelled with its age) rather than a blank screen while
+  a sleeping free-tier host boots.
 - **Admin panel** (`/admin`): add/edit/delete gyms and machines from the
   app itself. Gated by `ADMIN_TOKEN` (see Quick Start above) — a single
   shared password, not a full user-account system. A machine's

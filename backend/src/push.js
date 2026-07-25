@@ -1,0 +1,100 @@
+import webpush from 'web-push';
+import {
+  listWatchersOfMachine,
+  removeMachineWatch,
+  deletePushSubscriptionByEndpoint,
+} from './store.js';
+
+// Real Web Push, so "notify me when this is free" fires with the browser
+// fully closed. The previous implementation watched the WebSocket from the
+// page, which meant it only worked while the tab was alive — the one thing
+// you cannot rely on for someone who put their phone away.
+//
+// Push needs a VAPID keypair identifying this server to the browser's push
+// service. Without one configured, push is simply off and the frontend
+// keeps using its WebSocket fallback, so the app still works.
+
+const publicKey = process.env.VAPID_PUBLIC_KEY;
+const privateKey = process.env.VAPID_PRIVATE_KEY;
+// Push services want a contact for the application server, so they have
+// someone to reach about a misbehaving sender.
+const subject = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+
+export const pushEnabled = Boolean(publicKey && privateKey);
+
+if (pushEnabled) {
+  webpush.setVapidDetails(subject, publicKey, privateKey);
+}
+
+export function pushPublicKey() {
+  return pushEnabled ? publicKey : null;
+}
+
+function toWebPushSubscription(row) {
+  return {
+    endpoint: row.endpoint,
+    keys: { p256dh: row.p256dh, auth: row.auth },
+  };
+}
+
+/**
+ * Notifies everyone watching this machine that it's free, then clears the
+ * watches — the request was for one alert, not a subscription to every
+ * future transition.
+ *
+ * Never throws. A push service being slow or rejecting a stale endpoint
+ * must not turn a device's status report into a 500; the status update
+ * itself already succeeded and matters more.
+ */
+export async function notifyMachineOpen(machine) {
+  if (!pushEnabled) return { sent: 0, expired: 0 };
+
+  let subscriptions;
+  try {
+    subscriptions = await listWatchersOfMachine(machine.id);
+  } catch (err) {
+    console.error('push: could not load watchers:', err.message);
+    return { sent: 0, expired: 0 };
+  }
+  if (subscriptions.length === 0) return { sent: 0, expired: 0 };
+
+  const payload = JSON.stringify({
+    title: 'Machine available',
+    body: `${machine.name} is now open.`,
+    machineId: machine.id,
+    gymId: machine.gymId,
+  });
+
+  let sent = 0;
+  let expired = 0;
+  let failed = 0;
+
+  // Each watch is retired individually, by outcome. Clearing them all
+  // regardless would mean a push service having a bad minute silently
+  // consumed the alert someone was waiting for.
+  await Promise.all(subscriptions.map(async (row) => {
+    try {
+      await webpush.sendNotification(toWebPushSubscription(row), payload);
+      sent++;
+      // Delivered, so the request is fulfilled: this was an ask for one
+      // alert, not a subscription to every future transition.
+      await removeMachineWatch(row.id, machine.id).catch(() => {});
+    } catch (err) {
+      // 404 and 410 mean the browser threw the subscription away — site
+      // data cleared, PWA uninstalled, or the push service retired the
+      // endpoint. Those never recover, so drop the subscription instead of
+      // retrying it on every future transition. Its watches cascade.
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        expired++;
+        await deletePushSubscriptionByEndpoint(row.endpoint).catch(() => {});
+      } else {
+        // Anything else may be transient, so the watch stays and a later
+        // transition tries again.
+        failed++;
+        console.error(`push: send failed (${err.statusCode ?? 'no status'}):`, err.message);
+      }
+    }
+  }));
+
+  return { sent, expired, failed };
+}

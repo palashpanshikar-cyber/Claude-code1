@@ -54,6 +54,28 @@ CREATE TABLE IF NOT EXISTS status_events (
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS crowd_status TEXT;
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS crowd_reported_at BIGINT;
 
+-- Web Push. One row per browser subscription; the endpoint URL is the
+-- subscription's identity, so it carries the uniqueness constraint and a
+-- re-subscribing browser updates its keys instead of adding a row.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         SERIAL PRIMARY KEY,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS machine_watches (
+  id              SERIAL PRIMARY KEY,
+  subscription_id INTEGER NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+  machine_id      INTEGER NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
+  created_at      BIGINT NOT NULL,
+  -- Tapping the bell twice must not queue two notifications.
+  UNIQUE (subscription_id, machine_id)
+);
+
+CREATE INDEX IF NOT EXISTS machine_watches_machine_idx ON machine_watches (machine_id);
+
 CREATE INDEX IF NOT EXISTS machines_gym_id_idx ON machines (gym_id);
 CREATE INDEX IF NOT EXISTS machines_device_id_idx ON machines (device_id);
 -- listStatusEvents always reads one machine's newest events.
@@ -274,6 +296,67 @@ export function createPgStore(connectionString) {
         [machineId, limit],
       );
       return rows.map(toEvent);
+    },
+
+    // --- Web Push ---
+    async upsertPushSubscription({ endpoint, p256dh, auth }) {
+      const { rows } = await query(
+        `INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
+         RETURNING *`,
+        [endpoint, p256dh, auth, Date.now()],
+      );
+      return { ...rows[0], createdAt: Number(rows[0].created_at) };
+    },
+
+    async deletePushSubscriptionByEndpoint(endpoint) {
+      // machine_watches cascades from the subscription.
+      const { rowCount } = await query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+      return rowCount > 0;
+    },
+
+    async addMachineWatch(subscriptionId, machineId) {
+      const { rows } = await query(
+        `INSERT INTO machine_watches (subscription_id, machine_id, created_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (subscription_id, machine_id) DO UPDATE SET created_at = EXCLUDED.created_at
+         RETURNING *`,
+        [subscriptionId, machineId, Date.now()],
+      );
+      return rows[0];
+    },
+
+    async removeMachineWatch(subscriptionId, machineId) {
+      const { rowCount } = await query(
+        'DELETE FROM machine_watches WHERE subscription_id = $1 AND machine_id = $2',
+        [subscriptionId, machineId],
+      );
+      return rowCount > 0;
+    },
+
+    async listWatchersOfMachine(machineId) {
+      const { rows } = await query(
+        `SELECT s.* FROM push_subscriptions s
+           JOIN machine_watches w ON w.subscription_id = s.id
+          WHERE w.machine_id = $1`,
+        [machineId],
+      );
+      return rows;
+    },
+
+    async listWatchedMachineIds(endpoint) {
+      const { rows } = await query(
+        `SELECT w.machine_id FROM machine_watches w
+           JOIN push_subscriptions s ON s.id = w.subscription_id
+          WHERE s.endpoint = $1`,
+        [endpoint],
+      );
+      return rows.map((r) => r.machine_id);
+    },
+
+    async clearWatchesOfMachine(machineId) {
+      await query('DELETE FROM machine_watches WHERE machine_id = $1', [machineId]);
     },
   };
 }

@@ -8,7 +8,13 @@ import { cn } from "@/lib/utils";
 import { useCachedResource } from "@/lib/useCachedResource";
 import { fetchGym, fetchMachines, subscribeToUpdates, reportMachineStatus } from "@/lib/api";
 import { getFavoriteGymId, toggleFavoriteGym } from "@/lib/favorites";
-import { ensureNotificationPermission, notify } from "@/lib/notifications";
+import {
+  ensureNotificationPermission,
+  notify,
+  watchMachinePush,
+  unwatchMachinePush,
+  fetchPushWatchedMachineIds,
+} from "@/lib/notifications";
 
 const FILTERS = [
   { key: "all", label: "All" },
@@ -32,6 +38,25 @@ export default function GymDetail() {
   // purely to trigger a re-render so the bell icons reflect the ref.
   const watchedIdsRef = useRef(new Set());
   const [watchedIds, setWatchedIds] = useState(() => new Set());
+  // Whether real push took the watch. When it did, the server sends the
+  // notification and the WebSocket handler below must not also fire one,
+  // or a machine freeing up while the tab is open notifies twice.
+  const pushWatchedRef = useRef(new Set());
+
+  // A push watch lives on the server, so after a reload the bell would read
+  // as off while a notification is still coming. Restore it.
+  useEffect(() => {
+    let cancelled = false;
+    fetchPushWatchedMachineIds().then((ids) => {
+      if (cancelled || !ids?.length) return;
+      for (const machineId of ids) {
+        watchedIdsRef.current.add(machineId);
+        pushWatchedRef.current.add(machineId);
+      }
+      setWatchedIds(new Set(watchedIdsRef.current));
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Both halves of the page in one cache entry, so a cold start restores
   // the header and the machine list together rather than showing one
@@ -54,10 +79,9 @@ export default function GymDetail() {
   const gym = data?.gym ?? null;
   const machines = data?.machines ?? [];
 
-  // Live updates over WebSocket, filtered to this gym. Also the trigger
-  // point for "notify me when open": fires only while this page is mounted
-  // and the WS connection is live — see lib/notifications.js for why this
-  // isn't real (works-when-closed) push.
+  // Live updates over WebSocket, filtered to this gym. Also where the
+  // fallback notification fires, for machines whose watch is not backed by
+  // real push — see lib/notifications.js.
   useEffect(() => {
     const unsubscribe = subscribeToUpdates((updated) => {
       if (updated.gym_id !== gymId) return;
@@ -70,8 +94,12 @@ export default function GymDetail() {
       );
 
       if (watchedIdsRef.current.has(updated.id) && updated.status === "open") {
+        // The server already pushed this one; notifying here as well would
+        // double up whenever the tab happens to be open.
+        const handledByPush = pushWatchedRef.current.has(updated.id);
         watchedIdsRef.current.delete(updated.id);
-        notify("Machine available", `${updated.name} is now open.`);
+        pushWatchedRef.current.delete(updated.id);
+        if (!handledByPush) notify("Machine available", `${updated.name} is now open.`);
         setWatchedIds(new Set(watchedIdsRef.current));
       }
     });
@@ -105,13 +133,31 @@ export default function GymDetail() {
   const toggleWatch = useCallback(async (machineId) => {
     if (watchedIdsRef.current.has(machineId)) {
       watchedIdsRef.current.delete(machineId);
+      if (pushWatchedRef.current.has(machineId)) {
+        pushWatchedRef.current.delete(machineId);
+        // Best effort: the local bell is already off, and leaving a watch
+        // on the server only risks one unwanted notification.
+        unwatchMachinePush(machineId).catch(() => {});
+      }
       setWatchedIds(new Set(watchedIdsRef.current));
       return;
     }
 
     const granted = await ensureNotificationPermission();
     if (!granted) return;
+
+    // Try real push first, so the alert survives closing the browser. If
+    // the server has no VAPID keys, or this browser won't subscribe, fall
+    // through to the WebSocket notification rather than offering nothing.
+    let viaPush = false;
+    try {
+      viaPush = await watchMachinePush(machineId);
+    } catch {
+      viaPush = false;
+    }
+
     watchedIdsRef.current.add(machineId);
+    if (viaPush) pushWatchedRef.current.add(machineId);
     setWatchedIds(new Set(watchedIdsRef.current));
   }, []);
 

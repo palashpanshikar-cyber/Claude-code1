@@ -163,9 +163,42 @@ set `DATA_PATH` into it, set `ADMIN_TOKEN`, keep it to one instance.
 | `NODE_ENV` | recommended | *(unset)* | `production` closes CORS to cross-origin browsers. Set by the `Dockerfile`. |
 | `CORS_ORIGIN` | no | *(unset)* | Comma-separated origins to allow. Only needed if you host the frontend somewhere other than the backend. Doesn't affect sensors — they don't send `Origin`. |
 | `CLIENT_DIR` | no | `../frontend/dist` | Where to find the built frontend. The default is already correct in the image. |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for push | *(unset)* | Keypair enabling real Web Push, so "notify me when open" fires with the browser closed. Generate once (below). Unset means push is off and clients fall back to a notification that only works while a tab is open. |
+| `VAPID_SUBJECT` | no | `mailto:admin@example.com` | Contact address push services can use to reach you about a misbehaving sender. Set it to a real address. |
 | `SEED_ON_EMPTY` | no | *(unset)* | Set to `true` to insert the demo gyms at boot **when the store is empty**. For disk-less free tiers, where a cold start would otherwise serve a blank app. Never overwrites existing data, but mints new device keys each time it fires — leave it unset once you have a disk. |
 
 ---
+
+## Turning on real push notifications
+
+Without this, "notify me when open" still works, but only while a tab is
+open — it can't wake a closed browser. Real Web Push can, and needs a
+VAPID keypair identifying your server to the browser's push service.
+
+Generate one (from `backend/`, after `npm install`):
+
+```bash
+node -e "console.log(require('web-push').generateVAPIDKeys())"
+```
+
+Set the two values as `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in your
+host's environment settings, plus `VAPID_SUBJECT` as `mailto:` your own
+address. **In the dashboard, not in `render.yaml`** — the private key is a
+secret. The log line `web push: enabled` confirms it.
+
+Keep the keypair. Regenerating it invalidates every existing subscription,
+so everyone who tapped a bell silently stops being notified until they
+tap again.
+
+Two things worth knowing:
+
+- **The app must be installed or served over HTTPS.** Browsers only allow
+  push on secure origins, which any hosted deployment satisfies. It will
+  not work against `http://localhost:3001` on your PC.
+- **A free instance that's asleep can still deliver.** The push is sent by
+  the browser's push service, not your server — but your server has to be
+  awake at the moment the machine frees up in order to send it. Since it's
+  a device or crowd report that wakes it, that generally holds.
 
 ## Pointing your sensors at the deployed backend
 

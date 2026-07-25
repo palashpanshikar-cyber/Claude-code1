@@ -39,4 +39,11 @@ export const {
   regenerateMachineKey,
   insertStatusEvent,
   listStatusEvents,
+  upsertPushSubscription,
+  deletePushSubscriptionByEndpoint,
+  addMachineWatch,
+  removeMachineWatch,
+  listWatchersOfMachine,
+  listWatchedMachineIds,
+  clearWatchesOfMachine,
 } = store;

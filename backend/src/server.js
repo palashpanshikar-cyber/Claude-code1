@@ -11,6 +11,9 @@ import { gymsRouter } from './routes/gyms.js';
 import { machinesRouter } from './routes/machines.js';
 import { devicesRouter } from './routes/devices.js';
 import { adminRouter } from './routes/admin.js';
+import { pushRouter } from './routes/push.js';
+import { pushEnabled } from './push.js';
+import { publishMachineUpdate } from './machineEvents.js';
 import { registerClient, broadcast } from './hub.js';
 import { serializeMachine } from './machines.js';
 
@@ -44,6 +47,7 @@ app.use('/api/gyms', gymsRouter);
 app.use('/api/machines', machinesRouter);
 app.use('/api/devices', devicesRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/push', pushRouter);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -115,7 +119,11 @@ const offlineSweep = setInterval(async () => {
       const serialized = serializeMachine(machine);
       if (lastBroadcastStatus.get(machine.id) !== serialized.status) {
         lastBroadcastStatus.set(machine.id, serialized.status);
-        broadcast({ type: 'machine_update', machine: serialized });
+        // Through the shared path so a transition the sweep is first to
+        // notice still notifies anyone waiting. In practice the sweep only
+        // ever discovers staleness, but that is a property of the current
+        // rules, not something worth depending on here.
+        await publishMachineUpdate(serialized, { statusChanged: true });
       }
     }
   } catch (err) {
@@ -157,6 +165,11 @@ async function start() {
     if (!process.env.ADMIN_TOKEN) {
       console.warn('ADMIN_TOKEN not set — admin routes will respond 503 until it is');
     }
+    console.log(
+      pushEnabled
+        ? 'web push: enabled'
+        : 'web push: disabled (set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY) — clients fall back to WebSocket notifications',
+    );
   });
 }
 

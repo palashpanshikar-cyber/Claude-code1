@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getMachine, listStatusEvents, setCrowdReport } from '../store.js';
 import { serializeMachine } from '../machines.js';
-import { broadcast } from '../hub.js';
+import { publishMachineUpdate } from '../machineEvents.js';
 import { route } from '../asyncRoute.js';
 
 export const machinesRouter = Router();
@@ -65,13 +65,19 @@ machinesRouter.post('/:machineId/report', route(async (req, res) => {
   }
   lastReportAt.set(cooldownKey, now);
 
+  const previousStatus = serializeMachine(machine).status;
+
   const updated = await setCrowdReport(machineId, status, now);
   if (!updated) return res.status(404).json({ error: 'not_found' });
 
   const serialized = serializeMachine(updated);
-  // Same broadcast shape a device report produces, so every open client
-  // updates through the existing WebSocket path with no new plumbing.
-  broadcast({ type: 'machine_update', machine: serialized });
+  // Same path a device report takes, so open clients update over the
+  // existing WebSocket and anyone waiting on this machine gets their push —
+  // someone saying "it's free" is exactly as worth notifying as a sensor
+  // saying it.
+  await publishMachineUpdate(serialized, {
+    statusChanged: serialized.status !== previousStatus,
+  });
 
   res.json({ ok: true, machine: serialized });
 }));

@@ -19,7 +19,17 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function emptyData() {
-  return { gyms: [], machines: [], statusEvents: [], nextGymId: 1, nextMachineId: 1, nextEventId: 1 };
+  return {
+    gyms: [], machines: [], statusEvents: [],
+    pushSubscriptions: [], machineWatches: [],
+    nextGymId: 1, nextMachineId: 1, nextEventId: 1, nextSubscriptionId: 1, nextWatchId: 1,
+  };
+}
+
+// A data file written by an older version has no push collections. Filling
+// them in on read avoids every accessor having to guard for undefined.
+function withDefaults(loaded) {
+  return { ...emptyData(), ...loaded };
 }
 
 export function createJsonStore() {
@@ -29,7 +39,9 @@ export function createJsonStore() {
   // without the file, or not exist at all on a first boot.
   fs.mkdirSync(path.dirname(dataPath), { recursive: true });
 
-  let data = fs.existsSync(dataPath) ? JSON.parse(fs.readFileSync(dataPath, 'utf8')) : emptyData();
+  let data = fs.existsSync(dataPath)
+    ? withDefaults(JSON.parse(fs.readFileSync(dataPath, 'utf8')))
+    : emptyData();
 
   function persist() {
     // Every device report rewrites this entire file, so an unattended
@@ -207,6 +219,80 @@ export function createJsonStore() {
         .filter((e) => e.machineId === machineId)
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);
+    },
+
+    // --- Web Push ---
+    // The endpoint URL is the identity of a browser's subscription, so it
+    // is the natural key: the same browser re-subscribing must update its
+    // keys rather than accumulate rows.
+    async upsertPushSubscription({ endpoint, p256dh, auth }) {
+      const existing = data.pushSubscriptions.find((s) => s.endpoint === endpoint);
+      if (existing) {
+        existing.p256dh = p256dh;
+        existing.auth = auth;
+        persist();
+        return existing;
+      }
+      const subscription = {
+        id: data.nextSubscriptionId++,
+        endpoint,
+        p256dh,
+        auth,
+        createdAt: Date.now(),
+      };
+      data.pushSubscriptions.push(subscription);
+      persist();
+      return subscription;
+    },
+
+    async deletePushSubscriptionByEndpoint(endpoint) {
+      const before = data.pushSubscriptions.length;
+      const removed = data.pushSubscriptions.filter((s) => s.endpoint === endpoint);
+      const removedIds = new Set(removed.map((s) => s.id));
+      data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+      data.machineWatches = data.machineWatches.filter((w) => !removedIds.has(w.subscriptionId));
+      persist();
+      return data.pushSubscriptions.length < before;
+    },
+
+    async addMachineWatch(subscriptionId, machineId) {
+      const existing = data.machineWatches.find(
+        (w) => w.subscriptionId === subscriptionId && w.machineId === machineId,
+      );
+      if (existing) return existing;
+      const watch = { id: data.nextWatchId++, subscriptionId, machineId, createdAt: Date.now() };
+      data.machineWatches.push(watch);
+      persist();
+      return watch;
+    },
+
+    async removeMachineWatch(subscriptionId, machineId) {
+      const before = data.machineWatches.length;
+      data.machineWatches = data.machineWatches.filter(
+        (w) => !(w.subscriptionId === subscriptionId && w.machineId === machineId),
+      );
+      persist();
+      return data.machineWatches.length < before;
+    },
+
+    async listWatchersOfMachine(machineId) {
+      const subscriptionIds = new Set(
+        data.machineWatches.filter((w) => w.machineId === machineId).map((w) => w.subscriptionId),
+      );
+      return data.pushSubscriptions.filter((s) => subscriptionIds.has(s.id));
+    },
+
+    async listWatchedMachineIds(endpoint) {
+      const subscription = data.pushSubscriptions.find((s) => s.endpoint === endpoint);
+      if (!subscription) return [];
+      return data.machineWatches
+        .filter((w) => w.subscriptionId === subscription.id)
+        .map((w) => w.machineId);
+    },
+
+    async clearWatchesOfMachine(machineId) {
+      data.machineWatches = data.machineWatches.filter((w) => w.machineId !== machineId);
+      persist();
     },
   };
 }

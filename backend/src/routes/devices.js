@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { getMachineByDeviceId, updateMachineStatus, insertStatusEvent } from '../store.js';
 import { serializeMachine } from '../machines.js';
-import { broadcast } from '../hub.js';
+import { publishMachineUpdate } from '../machineEvents.js';
 import { route } from '../asyncRoute.js';
 
 export const devicesRouter = Router();
@@ -27,6 +27,10 @@ devicesRouter.post('/:deviceId/status', route(async (req, res) => {
   }
 
   const now = Date.now();
+  // Compared on the effective status, not the raw column: a machine whose
+  // sensor had gone stale reads as offline, so the same status coming back
+  // is a real transition that someone waiting deserves to hear about.
+  const previousStatus = serializeMachine(machine).status;
   const statusChanged = machine.status !== status;
 
   const updated = await updateMachineStatus(machine.id, {
@@ -44,7 +48,9 @@ devicesRouter.post('/:deviceId/status', route(async (req, res) => {
   }
 
   const serialized = serializeMachine(updated);
-  broadcast({ type: 'machine_update', machine: serialized });
+  await publishMachineUpdate(serialized, {
+    statusChanged: serialized.status !== previousStatus,
+  });
 
   res.json({ ok: true, machine: serialized });
 }));
