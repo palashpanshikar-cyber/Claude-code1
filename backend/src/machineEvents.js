@@ -19,5 +19,12 @@ export async function publishMachineUpdate(machine, { statusChanged = false } = 
     // a push service having a bad day must not fail the status report that
     // triggered it.
     await notifyMachineOpen(machine);
+  } else if (machine.status === 'open') {
+    // The commonest reason a watched machine doesn't notify: it was already
+    // open, so nothing transitioned. Worth a line, because from the outside
+    // this is indistinguishable from a broken push setup.
+    console.log(
+      `push: ${machine.name} (id ${machine.id}) reported open but was already open — no notification sent`,
+    );
   }
 }

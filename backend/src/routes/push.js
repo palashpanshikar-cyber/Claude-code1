@@ -7,7 +7,7 @@ import {
   removeMachineWatch,
   listWatchedMachineIds,
 } from '../store.js';
-import { pushEnabled, pushPublicKey } from '../push.js';
+import { pushEnabled, pushPublicKey, describeEndpoint } from '../push.js';
 import { route } from '../asyncRoute.js';
 
 export const pushRouter = Router();
@@ -44,6 +44,12 @@ pushRouter.post('/watch', route(async (req, res) => {
   const saved = await upsertPushSubscription(subscription);
   await addMachineWatch(saved.id, machineId);
 
+  // Logged so "the bell did nothing" can be split at its first fork: either
+  // the browser never got as far as registering, or it did and the problem
+  // is downstream.
+  console.log(
+    `push: watch registered for machine ${machineId} by ${describeEndpoint(subscription.endpoint)}`,
+  );
   res.status(201).json({ ok: true, machineId });
 }));
 
