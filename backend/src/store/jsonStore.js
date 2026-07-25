@@ -130,8 +130,22 @@ export function createJsonStore() {
         batteryPct: null,
         rssi: null,
         lastSeenAt: null,
+        crowdStatus: null,
+        crowdReportedAt: null,
       };
       data.machines.push(machine);
+      persist();
+      return machine;
+    },
+
+    async setCrowdReport(id, status, reportedAt) {
+      const machine = getMachineSync(id);
+      if (!machine) return null;
+      // Stored separately from the device's own status rather than
+      // overwriting it, so a sensor coming back online immediately takes
+      // precedence again without having to undo anything.
+      machine.crowdStatus = status;
+      machine.crowdReportedAt = reportedAt;
       persist();
       return machine;
     },

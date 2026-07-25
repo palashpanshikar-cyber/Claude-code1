@@ -6,7 +6,7 @@ import PullToRefresh from "@/components/PullToRefresh";
 import { EmptyState, ErrorState, StaleBanner, WakingNotice } from "@/components/LoadState";
 import { cn } from "@/lib/utils";
 import { useCachedResource } from "@/lib/useCachedResource";
-import { fetchGym, fetchMachines, subscribeToUpdates } from "@/lib/api";
+import { fetchGym, fetchMachines, subscribeToUpdates, reportMachineStatus } from "@/lib/api";
 import { getFavoriteGymId, toggleFavoriteGym } from "@/lib/favorites";
 import { ensureNotificationPermission, notify } from "@/lib/notifications";
 
@@ -77,6 +77,30 @@ export default function GymDetail() {
     });
     return unsubscribe;
   }, [gymId, setData]);
+
+  // Per-machine so two cards can't share one spinner or one error.
+  const [reportStates, setReportStates] = useState({});
+
+  const handleReport = useCallback(async (machineId, status) => {
+    setReportStates((prev) => ({ ...prev, [machineId]: "sending" }));
+    try {
+      const updated = await reportMachineStatus(machineId, status);
+      // The server also broadcasts this over the WebSocket, but applying
+      // the response directly means the card updates even if this client's
+      // socket happens to be reconnecting.
+      setData((prev) =>
+        prev
+          ? { ...prev, machines: prev.machines.map((m) => (m.id === updated.id ? updated : m)) }
+          : prev
+      );
+      setReportStates((prev) => ({ ...prev, [machineId]: "sent" }));
+    } catch (err) {
+      setReportStates((prev) => ({
+        ...prev,
+        [machineId]: err.code === "TOO_SOON" ? "too_soon" : "failed",
+      }));
+    }
+  }, [setData]);
 
   const toggleWatch = useCallback(async (machineId) => {
     if (watchedIdsRef.current.has(machineId)) {
@@ -254,6 +278,8 @@ export default function GymDetail() {
                   machine={m}
                   isWatched={watchedIds.has(m.id)}
                   onToggleWatch={toggleWatch}
+                  onReport={handleReport}
+                  reportState={reportStates[m.id]}
                 />
               ))}
             </div>

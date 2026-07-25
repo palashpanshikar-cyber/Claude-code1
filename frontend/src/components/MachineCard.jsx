@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, CircleCheck, CircleDot, CircleSlash, Battery, BatteryWarning, Bell, BellRing } from "lucide-react";
+import { Activity, CircleCheck, CircleDot, CircleSlash, Battery, BatteryWarning, Bell, BellRing, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LOW_BATTERY_THRESHOLD = 20;
@@ -28,12 +28,14 @@ const STATUS_CONFIG = {
   },
 };
 
-export default function MachineCard({ machine, isWatched, onToggleWatch }) {
+export default function MachineCard({ machine, isWatched, onToggleWatch, onReport, reportState }) {
   const cfg = STATUS_CONFIG[machine.status] ?? STATUS_CONFIG.offline;
   const Icon = cfg.icon;
+  const fromCrowd = machine.status_source === "crowd";
 
   return (
-    <div className="flex select-none items-center justify-between rounded-xl border border-border bg-card p-4 transition-shadow hover:shadow-sm">
+    <div className="select-none rounded-xl border border-border bg-card p-4 transition-shadow hover:shadow-sm">
+    <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -76,11 +78,22 @@ export default function MachineCard({ machine, isWatched, onToggleWatch }) {
             {cfg.label}
           </span>
         </div>
-        {machine.last_updated && (
+        {/* Attribute the reading. A sensor's timestamp and a stranger's
+            recollection deserve different wording — presenting a crowd
+            report as a live measurement is the one way this feature could
+            make the app less trustworthy rather than more. */}
+        {fromCrowd ? (
           <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-            <Activity className="h-2.5 w-2.5" />
-            {timeAgo(machine.last_updated)}
+            <Users className="h-2.5 w-2.5" />
+            said {timeAgo(machine.reported_at)}
           </span>
+        ) : (
+          machine.last_updated && (
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Activity className="h-2.5 w-2.5" />
+              {timeAgo(machine.last_updated)}
+            </span>
+          )
         )}
         {machine.battery_pct != null && (
           <span
@@ -98,6 +111,46 @@ export default function MachineCard({ machine, isWatched, onToggleWatch }) {
           </span>
         )}
       </div>
+    </div>
+
+      {/* Only offered where it adds something: a machine whose sensor is
+          live is already telling the truth continuously, and a person
+          tapping a button could only make that worse. */}
+      {onReport && machine.status_source !== "sensor" && (
+        <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+          <span className="text-[11px] text-muted-foreground">
+            {reportState === "sent" ? "Thanks — updated." : "Using it now?"}
+          </span>
+          <div className="ml-auto flex gap-1.5">
+            {/* Named per machine: "In use" alone is indistinguishable from
+                the status filter chip of the same name, both to a screen
+                reader and to anything else addressing the page by label. */}
+            <button
+              type="button"
+              disabled={reportState === "sending"}
+              onClick={() => onReport(machine.id, "busy")}
+              aria-label={`Report ${machine.name} as in use`}
+              className="inline-flex h-7 items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-[11px] font-medium text-amber-700 disabled:opacity-50"
+            >
+              In use
+            </button>
+            <button
+              type="button"
+              disabled={reportState === "sending"}
+              onClick={() => onReport(machine.id, "open")}
+              aria-label={`Report ${machine.name} as free`}
+              className="inline-flex h-7 items-center rounded-full border border-green-500/30 bg-green-500/10 px-3 text-[11px] font-medium text-green-700 disabled:opacity-50"
+            >
+              It's free
+            </button>
+          </div>
+        </div>
+      )}
+      {reportState === "too_soon" && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          You just reported this one — try again in a moment.
+        </p>
+      )}
     </div>
   );
 }

@@ -24,9 +24,34 @@ function mapMachine(m) {
     machine_type: m.machineType,
     zone: m.zone ?? null,
     status: m.status, // backend already uses open/busy/offline/unknown
+    // 'sensor' | 'crowd' | null — whether this reading came from hardware,
+    // from someone in the gym tapping a button, or from nothing at all.
+    // The UI has to distinguish them; a person's guess and a continuous
+    // measurement should not look identical.
+    status_source: m.statusSource ?? null,
+    reported_at: m.crowdReportedAt ? new Date(m.crowdReportedAt).toISOString() : null,
     battery_pct: m.batteryPct ?? null,
     last_updated: m.lastSeenAt ? new Date(m.lastSeenAt).toISOString() : null,
   };
+}
+
+// Anyone in the gym can report a machine free or busy. Fills the gap for
+// machines with no sensor on them, which is all of them until the hardware
+// exists. A live sensor overrides this server-side.
+export async function reportMachineStatus(machineId, status) {
+  const res = await fetch(`/api/machines/${machineId}/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (res.status === 429) {
+    const err = new Error('reported too recently');
+    err.code = 'TOO_SOON';
+    throw err;
+  }
+  if (!res.ok) throw new Error('failed to report status');
+  const { machine } = await res.json();
+  return mapMachine(machine);
 }
 
 export async function fetchGyms() {

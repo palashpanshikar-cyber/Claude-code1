@@ -33,6 +33,7 @@ export const {
   getMachineByDeviceId,
   insertMachine,
   updateMachineStatus,
+  setCrowdReport,
   updateMachine,
   deleteMachine,
   regenerateMachineKey,

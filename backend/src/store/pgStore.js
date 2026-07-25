@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS status_events (
   created_at BIGINT NOT NULL
 );
 
+-- Added after machines already existed in deployed databases, so these
+-- run as ALTERs rather than being folded into the CREATE above:
+-- CREATE TABLE IF NOT EXISTS is a no-op on an existing table and would
+-- silently skip new columns.
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS crowd_status TEXT;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS crowd_reported_at BIGINT;
+
 CREATE INDEX IF NOT EXISTS machines_gym_id_idx ON machines (gym_id);
 CREATE INDEX IF NOT EXISTS machines_device_id_idx ON machines (device_id);
 -- listStatusEvents always reads one machine's newest events.
@@ -78,6 +85,10 @@ function toMachine(row) {
     // always fit a JS number. These are epoch milliseconds, well inside
     // the safe range, and everything downstream expects a number.
     lastSeenAt: row.last_seen_at === null ? null : Number(row.last_seen_at),
+    crowdStatus: row.crowd_status ?? null,
+    crowdReportedAt: row.crowd_reported_at === null || row.crowd_reported_at === undefined
+      ? null
+      : Number(row.crowd_reported_at),
   };
 }
 
@@ -208,6 +219,18 @@ export function createPgStore(connectionString) {
             SET status = $2, battery_pct = $3, rssi = $4, last_seen_at = $5
           WHERE id = $1 RETURNING *`,
         [id, status, batteryPct ?? null, rssi ?? null, lastSeenAt ?? null],
+      );
+      return toMachine(rows[0]) ?? null;
+    },
+
+    async setCrowdReport(id, status, reportedAt) {
+      // Kept in its own columns rather than overwriting the device's
+      // status, so a sensor coming back online takes precedence again with
+      // nothing to undo.
+      const { rows } = await query(
+        `UPDATE machines SET crowd_status = $2, crowd_reported_at = $3
+          WHERE id = $1 RETURNING *`,
+        [id, status, reportedAt],
       );
       return toMachine(rows[0]) ?? null;
     },
