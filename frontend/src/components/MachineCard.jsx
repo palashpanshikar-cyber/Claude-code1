@@ -28,7 +28,7 @@ const STATUS_CONFIG = {
   },
 };
 
-export default function MachineCard({ machine, isWatched, onToggleWatch, onReport, reportState }) {
+export default function MachineCard({ machine, isWatched, watchMode, onToggleWatch, onReport, reportState }) {
   const cfg = STATUS_CONFIG[machine.status] ?? STATUS_CONFIG.offline;
   const Icon = cfg.icon;
   const fromCrowd = machine.status_source === "crowd";
@@ -149,6 +149,21 @@ export default function MachineCard({ machine, isWatched, onToggleWatch, onRepor
       {reportState === "too_soon" && (
         <p className="mt-2 text-[11px] text-muted-foreground">
           You just reported this one — try again in a moment.
+        </p>
+      )}
+
+      {/* States what the bell actually promises. "Push" survives closing the
+          browser; the fallback dies with the tab. Without saying so, a lit
+          bell claims a guarantee the fallback can't keep. */}
+      {isWatched && watchMode === "push" && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          We'll notify you when this frees up — even if you close the app.
+        </p>
+      )}
+      {isWatched && watchMode === "local" && (
+        <p className="mt-2 text-[11px] text-amber-700">
+          We'll notify you only while this app stays open — background alerts
+          aren't available on this browser.
         </p>
       )}
     </div>

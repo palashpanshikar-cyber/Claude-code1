@@ -73,9 +73,13 @@ export async function getPushSubscription() {
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(config.publicKey),
     });
-  } catch {
-    // Blocked permission, or a browser that advertises PushManager without
-    // a usable push service. The caller falls back.
+  } catch (err) {
+    // Blocked permission, a browser that advertises PushManager without a
+    // usable push service, or iOS Safari outside an installed PWA. Logged
+    // rather than swallowed: when someone reports "the bell did nothing",
+    // this message is the whole diagnosis, and a silent failure here is
+    // indistinguishable from working.
+    console.warn('push subscribe failed, falling back to in-tab notifications:', err);
     return null;
   }
 }

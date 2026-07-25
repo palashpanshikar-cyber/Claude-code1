@@ -42,6 +42,11 @@ export default function GymDetail() {
   // notification and the WebSocket handler below must not also fire one,
   // or a machine freeing up while the tab is open notifies twice.
   const pushWatchedRef = useRef(new Set());
+  // Surfaced per machine, because the two kinds of watch make very
+  // different promises: one survives closing the browser and one does not.
+  // A bell that looks the same either way tells someone they will be
+  // notified when they won't be, which is worse than not offering it.
+  const [watchModes, setWatchModes] = useState({});
 
   // A push watch lives on the server, so after a reload the bell would read
   // as off while a notification is still coming. Restore it.
@@ -54,6 +59,11 @@ export default function GymDetail() {
         pushWatchedRef.current.add(machineId);
       }
       setWatchedIds(new Set(watchedIdsRef.current));
+      setWatchModes((prev) => {
+        const next = { ...prev };
+        for (const machineId of ids) next[machineId] = "push";
+        return next;
+      });
     });
     return () => { cancelled = true; };
   }, []);
@@ -140,6 +150,11 @@ export default function GymDetail() {
         unwatchMachinePush(machineId).catch(() => {});
       }
       setWatchedIds(new Set(watchedIdsRef.current));
+      setWatchModes((prev) => {
+        const next = { ...prev };
+        delete next[machineId];
+        return next;
+      });
       return;
     }
 
@@ -148,7 +163,9 @@ export default function GymDetail() {
 
     // Try real push first, so the alert survives closing the browser. If
     // the server has no VAPID keys, or this browser won't subscribe, fall
-    // through to the WebSocket notification rather than offering nothing.
+    // through to the WebSocket notification rather than offering nothing —
+    // but say which one happened, since only one of them works with the
+    // app closed.
     let viaPush = false;
     try {
       viaPush = await watchMachinePush(machineId);
@@ -159,6 +176,7 @@ export default function GymDetail() {
     watchedIdsRef.current.add(machineId);
     if (viaPush) pushWatchedRef.current.add(machineId);
     setWatchedIds(new Set(watchedIdsRef.current));
+    setWatchModes((prev) => ({ ...prev, [machineId]: viaPush ? "push" : "local" }));
   }, []);
 
   const zones = ["all", ...Array.from(new Set(machines.map((m) => m.zone).filter(Boolean)))];
@@ -323,6 +341,7 @@ export default function GymDetail() {
                   key={m.id}
                   machine={m}
                   isWatched={watchedIds.has(m.id)}
+                  watchMode={watchModes[m.id]}
                   onToggleWatch={toggleWatch}
                   onReport={handleReport}
                   reportState={reportStates[m.id]}
